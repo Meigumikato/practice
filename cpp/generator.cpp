@@ -3,9 +3,13 @@
 #include <iostream>
 #include <iterator>
 #include <concepts>
+#include <exception>
+#include <stdexcept>
 #include <type_traits>
+#include <coro/generator.hpp>
 
 #include <spdlog/spdlog.h>
+#include <utility>
 
 
 template<typename T>
@@ -28,13 +32,13 @@ struct GeneratorPromise {
 
   void return_void() {}
 
-  auto yield_value(T& a) -> std::suspend_always {
+  auto yield_value(std::remove_reference_t<T>& a) -> std::suspend_always {
     spdlog::info("GeneratorPromise lvalue reference yield_value {}", a);
     value = a;
     return {};
   }
 
-  auto yield_value(T&& a) -> std::suspend_always {
+  auto yield_value(std::remove_reference_t<T>&& a) -> std::suspend_always {
     spdlog::info("GeneratorPromise rvalue reference yield_value {}", a);
     value = a;
     return {};
@@ -48,12 +52,20 @@ struct GeneratorPromise {
 };
 
 
+class GeneratorExhaustException : std::exception {
+  public:
+
+};
+
 
 template<typename T>
 class Generator {
 
  public:
   using promise_type = GeneratorPromise<T>;
+
+  struct SentinelIterator {
+  };
 
   struct GeneratorIterator {
     using iterator_category = std::input_iterator_tag;
@@ -62,18 +74,7 @@ class Generator {
     using reference = T&;
     using pointer = T*;
 
-    GeneratorIterator(std::coroutine_handle<promise_type> handle) : 
-      handle_(handle) {
-    }
-
-    GeneratorIterator(const GeneratorIterator& other) : handle_(other.handle_) {
-    }
-
-    ~GeneratorIterator() {
-    }
-
     T& operator * () {
-      assert(handle_ != nullptr);
       return handle_.promise().value;
     }
 
@@ -84,15 +85,13 @@ class Generator {
     // prefix
     GeneratorIterator& operator ++ () {
 
-      assert(handle_ != nullptr);
       handle_.resume();
+
       if (handle_.done()) {
-        handle_ = nullptr;
-        assert(handle_ == nullptr);
-        return *this;
-      } else {
-        return *this;
-      }
+        // throw std::logic_error("operator++");
+      } 
+
+      return *this;
     }
 
     // postfix
@@ -102,12 +101,20 @@ class Generator {
       return temp;
     }
 
-    friend bool operator== (const GeneratorIterator& a, const GeneratorIterator& b) {
-      return a.handle_ == b.handle_;
+    friend bool operator== (const GeneratorIterator& a, const SentinelIterator&) {
+      return a.handle_.done() || a.handle_ == nullptr;
     }
 
-    friend bool operator!=(const GeneratorIterator& a, const GeneratorIterator& b) {
-      return !(a.handle_ == b.handle_);
+    friend bool operator== (const SentinelIterator&, const GeneratorIterator& a) {
+      return a.handle_.done() || a.handle_ == nullptr;
+    }
+
+    friend bool operator!=(const GeneratorIterator& a, const SentinelIterator& b) {
+      return !(a == b);
+    }
+
+    friend bool operator!=(const SentinelIterator& a, const GeneratorIterator& b) {
+      return !(a == b);
     }
 
     std::coroutine_handle<promise_type> handle_;
@@ -115,27 +122,46 @@ class Generator {
 
   Generator(std::coroutine_handle<promise_type> handle) : 
     handle_(handle) {
+  }
 
-    // spdlog::info("Generator construct handle={}", fmt::ptr(&handle));
+  Generator(Generator&& other) : handle_(std::exchange(other.handle_, nullptr)) {
+  }
+
+  Generator& operator=(Generator&& other) {
+    if (this == &other) {
+      return *this;
+    }
+
+    if (handle_ != nullptr) {
+      handle_.destroy();
+    }
+
+    handle_ = std::exchange(other.handle_, nullptr);
+    return *this;
   }
 
   ~Generator() {
-    handle_.destroy();
+    if (handle_ != nullptr) {
+      handle_.destroy();
+    }
   }
 
   GeneratorIterator begin() {
-    handle_.resume();
+    // because initial_suspend is suspend_always
+    if (handle_ != nullptr) {
+      handle_.resume();
 
-    if (handle_.done()) {
-      return end();
+      if (handle_.done()) {
+        // throw std::logic_error("begin");
+      }
     }
 
     return GeneratorIterator{handle_};
   }
 
 
-  GeneratorIterator end() {
-    return GeneratorIterator{nullptr};
+  SentinelIterator end() {
+    return SentinelIterator{};
   }
 
 
@@ -147,6 +173,19 @@ class Generator {
 
   template<typename Func>
   Generator<std::invoke_result_t<Func, T>> Map(Func&& func) {
+    for (auto ele : *this) {
+      co_yield func(ele);
+    }
+  }
+
+
+  template<typename Func>
+  Generator<T> Filter(Func&& func) {
+    for (auto ele : *this) {
+      if (func(ele)) {
+        co_yield ele;
+      }
+    }
   }
 
  private:
@@ -164,17 +203,51 @@ Generator<T> GeneratorPromise<T>::get_return_object() {
 
 
 template<typename... Args>
-void Test(Args&&... args) {
-
-  (std::cout << ... << args);
+Generator<int> Test(Args... args) {
+  (co_yield std::forward<Args>(args), ...);
 }
 
 
 int main() {
 
-  Test(1, 2, 3, 4);
-  for (auto iter : Generator<int>::From(1, 2, 3, 4)) {
-    spdlog::info("{}", iter);
+  auto g1 = Test(1, 2, 3, 4);
+  auto g2 = Test(5, 6, 7, 8);
+
+  g2 = std::move(g1);
+
+  g1 = std::move(g2);
+
+  g2 = std::move(g1);
+
+  auto filter_g = g2
+    .Filter([](auto x) {
+      return x % 2 == 0;
+    })
+  // ;
+  // auto map_g = filter_g
+    .Map([](auto x) -> char {
+      return 'a' + x;
+    });
+  //   .Map([](auto x) -> char {
+  //   return 'a' + x;
+  // });
+
+  // for (auto iter : g) {
+  //   spdlog::info("generator {}", iter);
+  // }
+  //
+  //
+  // g.begin();
+
+  // assert(g.begin() == g.end());
+
+  // assert(g.begin() == g.end());
+
+  // assert(map_g.begin() == map_g.end());
+  int i = 0;
+  for (auto x : filter_g) {
+    ++i;
+    spdlog::info("map {} {}", x, i);
   }
 
   return 0;
