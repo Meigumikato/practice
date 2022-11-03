@@ -1,4 +1,10 @@
+#![allow(dead_code)]
+
 use std::ops::Sub;
+mod lru_cache;
+
+
+
 
 fn main() {
     println!("Hello, world!");
@@ -234,13 +240,13 @@ fn add_two_numbers2(
 
             let sum = node1.val + node2.val;
 
-            let (carry, remainder) = if sum < 10 {
+            let (_, _) = if sum < 10 {
                 (false, sum)
             } else {
                 (true, sum % 10)
             };
 
-            Some(Box::new)
+            // Some(Box::new)
 
 
             None
