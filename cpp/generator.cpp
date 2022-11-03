@@ -28,8 +28,14 @@ struct GeneratorPromise {
 
   void return_void() {}
 
-  auto yield_value(T a) -> std::suspend_always {
-    // spdlog::info("GeneratorPromise yield_value {}", a);
+  auto yield_value(T& a) -> std::suspend_always {
+    spdlog::info("GeneratorPromise lvalue reference yield_value {}", a);
+    value = a;
+    return {};
+  }
+
+  auto yield_value(T&& a) -> std::suspend_always {
+    spdlog::info("GeneratorPromise rvalue reference yield_value {}", a);
     value = a;
     return {};
   }
@@ -118,11 +124,12 @@ class Generator {
   }
 
   GeneratorIterator begin() {
+    handle_.resume();
+
     if (handle_.done()) {
       return end();
-    } else {
-      handle_.resume();
     }
+
     return GeneratorIterator{handle_};
   }
 
@@ -134,7 +141,7 @@ class Generator {
 
   template<typename... Args>
   static Generator<T> From(Args&&... args) {
-    (co_yield args, ...);
+    (co_yield std::forward<Args>(args), ...);
   }
 
 
@@ -155,20 +162,18 @@ Generator<T> GeneratorPromise<T>::get_return_object() {
 }
 
 
-Generator<int> Counter(int x = 10) {
-  for (int i = 0; i < x; i++) {
-    // spdlog::info("Counter suspend {}", i);
-    co_yield i;
-    // spdlog::info("Counter resume {}", i);
-  }
+
+template<typename... Args>
+void Test(Args&&... args) {
+
+  (std::cout << ... << args);
 }
 
 
 int main() {
 
-  auto x = Counter();
-
-  for (auto iter : x) {
+  Test(1, 2, 3, 4);
+  for (auto iter : Generator<int>::From(1, 2, 3, 4)) {
     spdlog::info("{}", iter);
   }
 
