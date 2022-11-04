@@ -9,6 +9,7 @@
 #include <coro/task.hpp>
 
 
+
 template<typename T>
 class Task;
 
@@ -18,45 +19,76 @@ struct Awaiter;
 template<typename T>
 class TaskPromise {
  public:
-  // TaskPromise() noexcept = default;
-  // ~TaskPromise() = default;
 
-  friend struct FinalAwaiter;
+  using co_handle = std::coroutine_handle<TaskPromise>;
+
+  struct SuspendAlways {
+
+    SuspendAlways(TaskPromise& promise) : promise(promise) {
+    }
+
+    bool await_ready() const noexcept { 
+      spdlog::info("{} on initial_suspend stage suspend ready is {}",
+                   fmt::ptr(co_handle::from_promise(promise).address()),
+                   !false);
+      return false; 
+    }
+
+    void await_suspend(std::coroutine_handle<> h) const noexcept {
+      spdlog::info("{} on initial_suspend stage suspended", fmt::ptr(h.address()));
+    }
+
+    void await_resume() const noexcept {
+      spdlog::info("{} on initial_suspend stage resume to execute logic",
+                   fmt::ptr(co_handle::from_promise(promise).address()));
+    }
+
+    TaskPromise& promise;
+  };
 
   struct FinalAwaiter {
+    FinalAwaiter(TaskPromise& promise) : promise(promise) {
+    }
+
     bool await_ready() noexcept {
-      spdlog::info("final_suspend await_suspend not suspend");
+      spdlog::info("{} on final_suspend stage is ready to suspend",
+                   fmt::ptr(co_handle::from_promise(promise).address()));
       return false;
     }
 
-    std::coroutine_handle<> await_suspend(std::coroutine_handle<TaskPromise> h) noexcept {
-
+    std::coroutine_handle<> await_suspend(co_handle h) noexcept {
       auto& promise = h.promise();
       // resume parent
       if (promise.continuation_ != nullptr) {
-        spdlog::info("final_suspend await_suspend resume parent={}", fmt::ptr(&promise.continuation_));
+        spdlog::info("{} on final_suspend stage is suspend, ready to resume parent={}", 
+                     fmt::ptr(co_handle::from_promise(promise).address()),
+                     fmt::ptr(&promise.continuation_));
         return promise.continuation_;
       } 
 
       return std::noop_coroutine();
-
-      spdlog::info("final_suspend await_suspend");
     }
 
     void await_resume() noexcept {
-      spdlog::info("final_suspend await_resume");
+      spdlog::info("{} on final_suspend stage is resume",
+                   fmt::ptr(co_handle::from_promise(promise).address()));
     }
+
+    TaskPromise& promise;
   };
 
   Task<T> get_return_object() noexcept;
 
-  std::suspend_always initial_suspend() noexcept {
-    spdlog::info("initial_suspend suspend_always");
-    return {};
+  SuspendAlways initial_suspend() noexcept {
+    spdlog::info("{} on co_await initial_suspend stage", 
+                 fmt::ptr(co_handle::from_promise(*this).address()));
+    return {*this};
   }
 
   FinalAwaiter final_suspend() noexcept {
-    return {};
+    spdlog::info("{} on co_await final_suspend stage",
+                 fmt::ptr(co_handle::from_promise(*this).address()));
+    return {*this};
   }
 
   void unhandled_exception() noexcept {
@@ -64,56 +96,74 @@ class TaskPromise {
   }
 
   void return_value(T result) noexcept {
-    spdlog::info("TaskPromise return_value return_value={}", result);
+    spdlog::info("{} on co_return stage  return value={}",
+                 fmt::ptr(co_handle::from_promise(*this).address()),
+                 result);
     result_ = result;
   }
 
-private:
-  friend struct Awaiter<T>;
-  friend class Task<T>;
+  T Value() {
 
-  std::coroutine_handle<> continuation_;
+    if (std::holds_alternative<T>(result_)) {
+      return std::get<int>(result_);
+    } else {
+      std::rethrow_exception(std::get<std::exception_ptr>(result_));
+    }
+  }
+
+  void SetContinuation(co_handle h) {
+    continuation_ = h;
+  }
+
+ private:
+  friend struct Awaiter<T>;
+
+  co_handle continuation_;
   std::variant<std::monostate, T, std::exception_ptr> result_;
 };
 
 template<typename T>
 struct Awaiter {
+  // using promise_type = TaskPromise<T>;
+  using co_handle = typename TaskPromise<T>::co_handle;
 
-  using promise_type = typename Task<T>::promise_type;
-
-  explicit Awaiter(std::coroutine_handle<promise_type> h) noexcept :
+  explicit Awaiter(co_handle h) noexcept :
     coro_(h) {}
 
   bool await_ready() noexcept {
+    spdlog::info("{} on customalization co_await stage suspend ready status is {}", 
+                 fmt::ptr(coro_.address()), 
+                 !coro_ ||coro_.done());
 
-    spdlog::info("Awaiter await_ready {}", !coro_ ||coro_.done());
     return !coro_ || coro_.done();
   }
 
-  std::coroutine_handle<promise_type> await_suspend(std::coroutine_handle<promise_type> parent) noexcept {
-    coro_.promise().continuation_ = parent;
-    spdlog::info("Awaiter await_suspend continuation={} current={}", fmt::ptr(&coro_.promise().continuation_), fmt::ptr(&coro_));
+  co_handle await_suspend(co_handle parent) noexcept {
+    coro_.promise().SetContinuation(parent);
+    spdlog::info("{} on customalization co_await stage is suspended and continuation is {}", 
+                 fmt::ptr(coro_.promise().continuation_.address()),
+                 fmt::ptr(coro_.address()));
     return coro_;
   }
 
   T await_resume() {
-
-    T x = std::get<T>(coro_.promise().result_);
-    spdlog::info("Awaiter await_resume return_value={}", x);
-
+    T x = coro_.promise().Value();
+    spdlog::info("{} on await_resume resume co_await return is {}\n",
+                 fmt::ptr(coro_.address()), x);
     return x;
   }
 
  private:
   friend class Task<T>;
-  std::coroutine_handle<promise_type> coro_;
+  co_handle coro_;
 };
 
 template<typename T>
 class Task {
-public:
+ public:
 
   using promise_type = TaskPromise<T>;
+  using co_handle = typename TaskPromise<T>::co_handle;
 
   Task(Task&& t) noexcept {
     if (&t == this) {
@@ -128,15 +178,26 @@ public:
     coro_.destroy();
   }
 
-  Task& operator=(Task&& t) noexcept;
+  Task& operator=(Task&& t) noexcept {
+    if (&t == this) {
+      return *this;
+    }
+
+    t.coro_.destroy();
+    coro_ = std::exchange(t.coro_, nullptr);
+    return *this;
+  }
 
 
   void Resume() {
     coro_.resume();
   }
 
+  void SpawnOn() {
+  }
+
   T Value() {
-    return std::get<int>(coro_.promise().result_);
+    return coro_.promise().Value();
   }
 
   Awaiter<T> operator co_await() && noexcept {
@@ -146,17 +207,17 @@ public:
  private:
   friend class TaskPromise<T>;
 
-  explicit Task(std::coroutine_handle<promise_type> h) noexcept : coro_(h) {
+  explicit Task(co_handle h) noexcept : coro_(h) {}
 
-  }
-  std::coroutine_handle<promise_type> coro_;
+  co_handle coro_;
 };
 
 
 template<typename T>
 Task<T> TaskPromise<T>::get_return_object() noexcept {
-  return Task<T>{std::coroutine_handle<typename Task<T>::promise_type>::from_promise(*this)};
+  return Task<T>{TaskPromise::co_handle::from_promise(*this)};
 }
+
 
 
 Task<int> Take() {
@@ -164,6 +225,7 @@ Task<int> Take() {
 }
 
 Task<int> Sum(int a, int c) {
+  spdlog::error("sleep");
   sleep(1);
   co_return a + c;
 }
@@ -177,15 +239,7 @@ Task<int> Take42() {
 int main() {
   auto x = Take42();
 
-  int a = 0;
-  std::cin >> a;
-  x.Resume();
-
   std::cout << x.Value();
 
   return 0;
 }
-
-
-
-
