@@ -24,14 +24,6 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(spdlog)
 
 
-FetchContent_Declare(
-    libcoro
-    GIT_REPOSITORY https://github.com/jbaldwin/libcoro.git
-    GIT_TAG        v0.6
-)
-FetchContent_MakeAvailable(libcoro)
-
-
 
 
 add_executable(generator)
@@ -41,7 +33,7 @@ target_compile_options(generator PRIVATE
   )
 target_link_options(generator PRIVATE ${SANITIZER})
 target_sources(generator PRIVATE generator.cpp)
-target_link_libraries(generator PRIVATE spdlog::spdlog libcoro)
+target_link_libraries(generator PRIVATE spdlog::spdlog)
 
 add_executable(task)
 target_compile_features(task PRIVATE cxx_std_20)
@@ -49,5 +41,5 @@ target_compile_options(task PRIVATE
   ${COROUTINE_FLAG}
   )
 target_link_options(task PRIVATE ${SANITIZER})
-target_sources(task PRIVATE task.cpp)
-target_link_libraries(task PRIVATE spdlog::spdlog libcoro)
+target_sources(task PRIVATE task.cpp sync_wait.hpp)
+target_link_libraries(task PRIVATE spdlog::spdlog)

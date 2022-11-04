@@ -6,7 +6,6 @@
 #include <exception>
 #include <stdexcept>
 #include <type_traits>
-#include <coro/generator.hpp>
 
 #include <spdlog/spdlog.h>
 #include <utility>

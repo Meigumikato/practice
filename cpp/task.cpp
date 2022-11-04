@@ -6,7 +6,7 @@
 #include <variant>
 #include <spdlog/spdlog.h>
 
-#include <coro/task.hpp>
+#include "sync_wait.hpp"
 
 
 
@@ -60,9 +60,9 @@ class TaskPromise {
       auto& promise = h.promise();
       // resume parent
       if (promise.continuation_ != nullptr) {
-        spdlog::info("{} on final_suspend stage is suspend, ready to resume parent={}", 
+        spdlog::info("{} on final_suspend stage is suspended, ready to resume parent={}", 
                      fmt::ptr(co_handle::from_promise(promise).address()),
-                     fmt::ptr(&promise.continuation_));
+                     fmt::ptr(promise.continuation_.address()));
         return promise.continuation_;
       } 
 
@@ -111,14 +111,14 @@ class TaskPromise {
     }
   }
 
-  void SetContinuation(co_handle h) {
+  void SetContinuation(std::coroutine_handle<> h) {
     continuation_ = h;
   }
 
  private:
   friend struct Awaiter<T>;
 
-  co_handle continuation_;
+  std::coroutine_handle<> continuation_;
   std::variant<std::monostate, T, std::exception_ptr> result_;
 };
 
@@ -131,16 +131,16 @@ struct Awaiter {
     coro_(h) {}
 
   bool await_ready() noexcept {
-    spdlog::info("{} on customalization co_await stage suspend ready status is {}", 
+    spdlog::info("co_await caller on {} customalization co_await stage suspend ready status is {}", 
                  fmt::ptr(coro_.address()), 
                  !coro_ ||coro_.done());
 
     return !coro_ || coro_.done();
   }
 
-  co_handle await_suspend(co_handle parent) noexcept {
+  co_handle await_suspend(std::coroutine_handle<> parent) noexcept {
     coro_.promise().SetContinuation(parent);
-    spdlog::info("{} on customalization co_await stage is suspended and continuation is {}", 
+    spdlog::info("{} on customalization co_await stage is suspended and {} is resumed", 
                  fmt::ptr(coro_.promise().continuation_.address()),
                  fmt::ptr(coro_.address()));
     return coro_;
@@ -148,8 +148,8 @@ struct Awaiter {
 
   T await_resume() {
     T x = coro_.promise().Value();
-    spdlog::info("{} on await_resume resume co_await return is {}\n",
-                 fmt::ptr(coro_.address()), x);
+    spdlog::info("{} on customalization co_await stage is resumed, co_return value is {}\n",
+                 fmt::ptr(coro_.promise().continuation_.address()), x);
     return x;
   }
 
@@ -162,6 +162,7 @@ template<typename T>
 class Task {
  public:
 
+  using ValueType = T;
   using promise_type = TaskPromise<T>;
   using co_handle = typename TaskPromise<T>::co_handle;
 
@@ -170,12 +171,7 @@ class Task {
       return;
     }
 
-    coro_.destroy();
     coro_ = std::exchange(t.coro_, nullptr);
-  }
-
-  ~Task() {
-    coro_.destroy();
   }
 
   Task& operator=(Task&& t) noexcept {
@@ -183,9 +179,18 @@ class Task {
       return *this;
     }
 
-    t.coro_.destroy();
+    if (coro_ != nullptr) {
+      t.coro_.destroy();
+    }
+
     coro_ = std::exchange(t.coro_, nullptr);
     return *this;
+  }
+
+  ~Task() {
+    if (coro_) {
+      coro_.destroy();
+    }
   }
 
 
@@ -204,17 +209,22 @@ class Task {
     return Awaiter<T>{coro_};
   }
 
+  Awaiter<T> operator co_await() & noexcept {
+    return Awaiter<T>{coro_};
+  }
+
  private:
   friend class TaskPromise<T>;
 
   explicit Task(co_handle h) noexcept : coro_(h) {}
 
-  co_handle coro_;
+  co_handle coro_{nullptr};
 };
 
 
 template<typename T>
 Task<T> TaskPromise<T>::get_return_object() noexcept {
+  spdlog::info("{} get_return_object", fmt::ptr(TaskPromise::co_handle::from_promise(*this).address()));
   return Task<T>{TaskPromise::co_handle::from_promise(*this)};
 }
 
@@ -225,8 +235,6 @@ Task<int> Take() {
 }
 
 Task<int> Sum(int a, int c) {
-  spdlog::error("sleep");
-  sleep(1);
   co_return a + c;
 }
 
@@ -237,9 +245,7 @@ Task<int> Take42() {
 }
  
 int main() {
-  auto x = Take42();
-
-  std::cout << x.Value();
+  SyncWait(Take42());
 
   return 0;
 }
