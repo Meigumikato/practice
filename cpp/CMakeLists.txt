@@ -4,34 +4,19 @@ include(FetchContent)
 
 project(cpp)
 
-
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(SANITIZER "-fsanitize=address")
 
-set(COROUTINE_FLAG "-fcoroutines")
-
-if (APPLE) 
-  set(COROUTINE_FLAG "-fcoroutnes-ts")
-endif()
-
-
-FetchContent_Declare(
-  spdlog
-  GIT_REPOSITORY https://github.com/gabime/spdlog.git
-  GIT_TAG v1.11.0
-)
-FetchContent_MakeAvailable(spdlog)
+# FetchContent_Declare(
+#   spdlog
+#   GIT_REPOSITORY https://github.com/gabime/spdlog.git
+#   GIT_TAG v1.11.0
+# )
+# FetchContent_MakeAvailable(spdlog)
 
 
-FetchContent_Declare(
-  asio
-  GIT_REPOSITORY https://github.com/boostorg/asio.git
-  GIT_TAG boost-1.80.0
-)
-
-FetchContent_MakeAvailable(asio)
-# find_package(Boost REQUIRED)
+find_package(spdlog REQUIRED)
 
 
 add_executable(generator)
@@ -43,7 +28,7 @@ target_link_libraries(generator PRIVATE spdlog::spdlog)
 add_executable(task)
 target_compile_features(task PRIVATE cxx_std_20)
 target_link_options(task PRIVATE ${SANITIZER})
-target_sources(task PRIVATE task.cpp sync_wait.hpp)
+target_sources(task PRIVATE task_test.cpp sync_wait.hpp)
 target_link_libraries(task PRIVATE spdlog::spdlog)
 
 add_executable(echo)
