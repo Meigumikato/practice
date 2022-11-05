@@ -1,4 +1,3 @@
-#include "spdlog/fmt/bundled/format.h"
 #include <coroutine>
 #include <exception>
 #include <iostream>
