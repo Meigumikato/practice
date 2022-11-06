@@ -47,7 +47,7 @@ struct GeneratorPromise {
     return value;
   }
 
-  T value{0};
+  T value;
 };
 
 
@@ -212,11 +212,11 @@ int main() {
   auto g1 = Test(1, 2, 3, 4);
   auto g2 = Test(5, 6, 7, 8);
 
-  g2 = std::move(g1);
-
-  g1 = std::move(g2);
-
-  g2 = std::move(g1);
+  // g2 = std::move(g1);
+  //
+  // g1 = std::move(g2);
+  //
+  // g2 = std::move(g1);
 
   auto filter_g = g2
     .Filter([](auto x) {

@@ -1,6 +1,7 @@
 #include <functional>
 #include <iostream>
 #include <string>
+#include <concepts>
 #include <type_traits>
 
 
@@ -12,8 +13,8 @@ enum class ConfigFormat {
 };
 
 
-
 template<typename T, typename Callable>
+requires std::is_invocable_v<Callable, T>
 auto operator | (T&& t, Callable&& callable) -> std::invoke_result_t<Callable, T> {
   return std::move(callable)(std::forward<T>(t));
 }
@@ -37,7 +38,6 @@ std::string ParseFileContent(std::string&& a) {
 }
 
 void CreateSome(std::string&& a) {
-
   std::cout << a << "Complete \n";
 }
 

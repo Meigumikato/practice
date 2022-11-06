@@ -1,18 +1,23 @@
-#include <algorithm>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <spdlog/common.h>
-#include <stdexcept>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <spdlog/spdlog.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <experimental/net>
+#include <experimental/io_context>
+#include <source_location>
 
 #include <cerrno>
 #include <cstring>
 
+#include <map>
 #include <future>
 #include <string>
+#include <stdexcept>
+#include <algorithm>
+
+#include <spdlog/common.h>
+#include <spdlog/spdlog.h>
 
 #include "task.hpp"
 
@@ -44,6 +49,28 @@ class Socket {
     return 0;
   }
 
+  Socket Accpet() {
+    ::sockaddr_in addr;
+    memset(&addr, 0,  sizeof(addr));
+    socklen_t len = sizeof(addr);
+    int new_socket_fd = ::accept4(socket_fd_, (::sockaddr*)(&addr), &len, SOCK_CLOEXEC );
+
+    spdlog::info("new connection ip={} port={}", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
+
+    return Socket{new_socket_fd};
+  }
+
+  Socket AsyncAccpet() {
+    ::sockaddr_in addr;
+    memset(&addr, 0,  sizeof(addr));
+    socklen_t len = sizeof(addr);
+    int new_socket_fd = ::accept4(socket_fd_, (::sockaddr*)(&addr), &len, SOCK_CLOEXEC );
+
+    spdlog::info("new connection ip={} port={}", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
+
+    return Socket{new_socket_fd};
+  }
+
  private:
   int socket_fd_;
 };
@@ -65,25 +92,47 @@ class IoContext {
       int cnt = ::epoll_wait(epoll_fd_, events.data(), 100, -1);
       if (cnt == -1) throw;
 
-      std::for_each_n(events.begin(), cnt, [](auto& event) {
-        Socket* s = reinterpret_cast<Socket*>(event.data.ptr);
-        spdlog::info("epoll event socket {}", (int)*s);
+      std::for_each_n(events.begin(), cnt, [this](auto& event) {
+        auto h = std::coroutine_handle<>::from_address(event.data.ptr);
+        h.resume();
       });
     }
   }
 
-  void Register(int fd, Socket& socket) {
+  void Register(int fd, void* ptr) {
     ::epoll_event event;
-    event.data.ptr = reinterpret_cast<void*>(&socket);
+    event.data.ptr = ptr;
     event.events = EPOLLIN | EPOLLOUT;
 
-    ::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &event);
+    auto ret = ::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &event);
+    if (ret == -1) {
+      spdlog::throw_spdlog_ex(strerror(errno));
+    }
   }
 
- private:
 
+  auto Get(Socket socket) & {
+
+    struct Awaiter {
+      Awaiter(IoContext* ctx, Socket socket) : ctx(ctx), socket(socket) {}
+      bool await_ready() { return false; }
+      void await_suspend(std::coroutine_handle<> h) {
+        // ctx->frames_.insert({socket, h});
+      }
+
+      void await_resume();
+
+      IoContext* ctx;
+      Socket socket;
+    };
+
+    return Awaiter{this, socket};
+  }
+
+
+ private:
+  // std::map<Socket, std::coroutine_handle<>> frames_;
   int epoll_fd_;
-  
 };
 
 
@@ -115,27 +164,31 @@ class Acceptor {
     spdlog::info("Accpetor listen on {}:{}", ip, port);
   }
 
-  Acceptor(IoContext& ctx, const char* ip, u_int16_t port) : Acceptor(ip, port) {
-    ctx.Register((int)accept_socket_, accept_socket_);
+  Acceptor(IoContext* ctx, const char* ip, u_int16_t port) : Acceptor(ip, port) {
+    ctx_ = ctx;
   }
 
-  Socket Accpet() {
-    ::sockaddr_in addr;
-    memset(&addr, 0,  sizeof(addr));
-    socklen_t len = sizeof(addr);
-    int new_socket_fd = ::accept4(accept_socket_, (::sockaddr*)(&addr), &len, SOCK_CLOEXEC );
 
-    spdlog::info("new connection ip={} port={}", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
+  auto AsyncAccpet() {
+    struct Awaiter : ::epoll_event {
+      IoContext* ctx;
+      Socket& socket;
 
-    return Socket{new_socket_fd};
-  }
+      Awaiter(IoContext* ctx, Socket& socket) : ctx(ctx), socket(socket) {
+      }
 
-  Task<Socket> AsyncAccept() {
-    ::sockaddr_in addr;
-    memset(&addr, 0,  sizeof(addr));
-    socklen_t len = sizeof(addr);
-    int new_socket_fd = ::accept4(accept_socket_, (::sockaddr*)(&addr), &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
-    co_return Socket{new_socket_fd};
+      bool await_ready() { return false; }
+
+      void await_suspend(std::coroutine_handle<> h) {
+        ctx->Register((int)socket, h.address());
+      }
+
+      Socket await_resume() {
+        return socket.Accpet();
+      }
+    };
+
+    return Awaiter(ctx_, accept_socket_);
   }
 
   Socket GetSocket() {
@@ -143,57 +196,56 @@ class Acceptor {
   }
 
  private:
+  IoContext* ctx_;
   std::string ip_;
   u_int16_t port_;
   Socket accept_socket_;
 };
 
 
-class Connector {
-  public:
-    Connector(const char* ip, u_int16_t port) : ip_(ip), port_(port) {
-    }
+// class Connector {
+//   public:
+//     Connector(const char* ip, u_int16_t port) : ip_(ip), port_(port) {
+//     }
+//
+//     void Connect() {
+//       ::sockaddr_in addr;
+//       memset(&addr, 0,  sizeof(addr));
+//       addr.sin_family = AF_INET;
+//       addr.sin_port = htons(port_);
+//       addr.sin_addr.s_addr = inet_addr(ip_.c_str());
+//
+//       socklen_t addrlen = sizeof(::sockaddr);
+//       int x = ::connect(connect_socket_, (::sockaddr*)(&addr), addrlen);
+//       if (x == -1) throw;
+//     }
+//
+//   private:
+//     std::string ip_;
+//     ::sockaddr_in addr_;
+//     int port_;
+//     Socket connect_socket_;
+// };
 
-    void Connect() {
-      ::sockaddr_in addr;
-      memset(&addr, 0,  sizeof(addr));
-      addr.sin_family = AF_INET;
-      addr.sin_port = htons(port_);
-      addr.sin_addr.s_addr = inet_addr(ip_.c_str());
 
-      socklen_t addrlen = sizeof(::sockaddr);
-      int x = ::connect(connect_socket_, (::sockaddr*)(&addr), addrlen);
-      if (x == -1) throw;
-    }
+Task<int> Listener(IoContext* ctx) {
 
-  private:
-    std::string ip_;
-    ::sockaddr_in addr_;
-    int port_;
-    Socket connect_socket_;
-};
-
-void Handle(Socket socket) {
-
-  for(;;) {
-
-    std::string data;
-    socket.Recv(data);
-    if (data == "quit") {
-      break;
-    }
-
-    socket.Send(data);
+  Acceptor acceptor(ctx, "127.0.0,1", 8192);
+  for (;;) {
+    auto new_socket = co_await acceptor.AsyncAccpet(); 
+    spdlog::info("new socket accept");
   }
 }
 
 int main() {
 
   IoContext ctx;
-  Acceptor a(ctx, "127.0.0.1", 8192);
+  // Acceptor a(ctx, "127.0.0.1", 8192);
 
-  spdlog::info("wait to accept {}", (int)a.GetSocket());
+  // spdlog::info("wait to accept {}", (int)a.GetSocket());
   spdlog::info("accept in");
+
+  auto task = Listener(&ctx);
 
   ctx.Run();
 
