@@ -5,16 +5,10 @@
 
 using namespace std::string_literals;
 
-
-
-struct Awaiter {
-
-};
-
+struct Awaiter {};
 
 // promise_type wrapper type
 struct Chat {
-
   struct promise_type {
     // store a value from or for the coroutine
     std::string msg_out{}, msg_in{};
@@ -35,7 +29,6 @@ struct Chat {
       return {};
     }
 
-
     auto await_transform(std::string) noexcept {
       struct Awaiter {
         promise_type& pt;
@@ -49,7 +42,6 @@ struct Chat {
       return Awaiter{*this};
     }
 
-
     // value from co_return
     void return_value(std::string msg) noexcept { msg_out = std::move(msg); }
   };
@@ -62,29 +54,33 @@ struct Chat {
   explicit Chat(promise_type* p) : co_handle({Handle::from_promise(*p)}) {}
 
   // move only
-  Chat(Chat&& rhs) : co_handle{std::exchange(rhs.co_handle, nullptr)}{}
+  Chat(Chat&& rhs) : co_handle{std::exchange(rhs.co_handle, nullptr)} {}
 
-  ~Chat() { if (co_handle) { co_handle.destroy(); } }
+  ~Chat() {
+    if (co_handle) {
+      co_handle.destroy();
+    }
+  }
 
   std::string listen() {
-    if (! co_handle.done()) { co_handle.resume(); }
+    if (!co_handle.done()) {
+      co_handle.resume();
+    }
     return std::move(co_handle.promise().msg_out);
   }
 
   // send data to the coroutine and activate it.
   void answer(std::string msg) {
     co_handle.promise().msg_in = msg;
-    if (!co_handle.done()) { co_handle.resume(); }
+    if (!co_handle.done()) {
+      co_handle.resume();
+    }
   }
 };
 
-
-
-
 Chat Fun() {
-
   // call promise_type.yield_value
-  co_yield "Hello!\n"s; 
+  co_yield "Hello!\n"s;
 
   // call promise_type.await_transform
   std::cout << co_await std::string{};
@@ -92,7 +88,6 @@ Chat Fun() {
   // call promise_type.return_value
   co_return "Here!\n"s;
 }
-
 
 void Use() {
   Chat chat = Fun();
@@ -103,8 +98,6 @@ void Use() {
 
   std::cout << chat.listen();
 }
-
-
 
 int main() {
   Use();

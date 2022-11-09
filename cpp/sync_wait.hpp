@@ -1,106 +1,141 @@
-#include <coroutine>
-#include <optional>
-#include <mutex>
-#include <condition_variable>
-#include <type_traits>
-
 #include <spdlog/spdlog.h>
 
-template<typename Awaitable>
+#include <concepts>
+#include <coroutine>
+#include <exception>
+#include <optional>
+#include <type_traits>
+#include <variant>
+
+#include "manual_reset_event.hpp"
+
+template <typename Awaitable>
 class SyncWaitTask;
 
+template <typename ResultType>
+class SyncWaitTaskPromise {
+ public:
+  auto unhandled_exception() { result_ = std::current_exception(); }
 
+  auto initial_suspend() -> std::suspend_always { return {}; }
 
-template<typename Awaitable>
-struct SyncWaitTaskPromise {
+  auto final_suspend() noexcept -> std::suspend_always { return {}; }
 
-  using ResultType = typename Awaitable::ValueType;
+  SyncWaitTask<ResultType> get_return_object();
 
-  void unhandled_exception() {
-
-  }
-
-  auto initial_suspend() -> std::suspend_always {
-    return {};
-  }
-
-  auto final_suspend() noexcept -> std::suspend_always {
-    return {};
-  }
-
-  auto get_return_object() -> SyncWaitTask<Awaitable>;
-
+  template <typename Awaitable>
   Awaitable await_transform(Awaitable&& a) {
     return std::forward<Awaitable>(a);
   }
 
   std::suspend_never yield_value(ResultType x) {
-
-    spdlog::info("SyncWait yield_value");
-    value_ = x;
-    // cv_.notify_one();
-    is_ok_ = true;
-
+    result_ = x;
     return {};
   }
 
-  bool is_ok_;
-  std::mutex mutex_;
-  std::condition_variable cv_;
-  std::optional<ResultType> value_;
-  std::optional<ResultType> result_;
+  ResultType GetResult() {
+    if (std::holds_alternative<ResultType>(result_)) {
+      return std::get<ResultType>(result_);
+    } else {
+      std::rethrow_exception(std::get<std::exception_ptr>(result_));
+    }
+  }
+
+ private:
+  std::variant<ResultType, std::exception_ptr> result_;
 };
 
+template <>
+class SyncWaitTaskPromise<void> {
+ public:
+  auto unhandled_exception() { result_ = std::current_exception(); }
 
-template<typename AwaitAble>
+  auto initial_suspend() -> std::suspend_always { return {}; }
+
+  auto final_suspend() noexcept -> std::suspend_always { return {}; }
+
+  SyncWaitTask<void> get_return_object();
+
+  template <typename Awaitable>
+  Awaitable await_transform(Awaitable&& a) {
+    return std::forward<Awaitable>(a);
+  }
+
+  void return_void() {}
+
+  void GetResult() {
+    if (result_) {
+      std::rethrow_exception(result_);
+    }
+  }
+
+ private:
+  std::exception_ptr result_;
+};
+
+template <typename ResultType>
 class SyncWaitTask {
-  public:
-    using promise_type = SyncWaitTaskPromise<AwaitAble>;
+ public:
+  using promise_type = SyncWaitTaskPromise<ResultType>;
 
-    SyncWaitTask(std::coroutine_handle<promise_type> h) : h_(h) {}
+  SyncWaitTask(std::coroutine_handle<promise_type> h) : h_(h) {}
 
-    ~SyncWaitTask() {
+  ~SyncWaitTask() {
+    if (h_) {
       h_.destroy();
     }
+  }
 
-    void Start() {
+  void Start(ManualResetEvent& event) {
+    if (h_) {
+      event.Set();
       h_.resume();
     }
+  }
 
-    void Wait() {
-      while(h_.promise().is_ok_) return;
+  void Wait() { h_.promise().event.Wait(); }
+
+  auto Value() {
+    if constexpr (std::is_same_v<ResultType, void>) {
+      h_.promise().GetResult();
+      return;
+    } else {
+      return h_.promise().GetResult();
     }
+  }
 
-    std::optional<typename AwaitAble::ValueType> Value() {
-      return h_.promise().value_;
-    }
-
-  private:
-    std::coroutine_handle<promise_type> h_;
+ private:
+  std::coroutine_handle<promise_type> h_;
 };
 
-template<typename Awaitable>
-auto SyncWaitTaskPromise<Awaitable>::get_return_object() -> SyncWaitTask<Awaitable> {
-  return SyncWaitTask<Awaitable>{std::coroutine_handle<SyncWaitTaskPromise<Awaitable>>::from_promise(*this)};
+template <typename ResultType>
+inline SyncWaitTask<ResultType> SyncWaitTaskPromise<ResultType>::get_return_object() {
+  return SyncWaitTask{std::coroutine_handle<SyncWaitTaskPromise>::from_promise(*this)};
 }
 
-template<typename Awaitable>
-SyncWaitTask<Awaitable> MakeSyncWaitTask(Awaitable&& a) {
+inline SyncWaitTask<void> SyncWaitTaskPromise<void>::get_return_object() {
+  return SyncWaitTask{std::coroutine_handle<SyncWaitTaskPromise>::from_promise(*this)};
+}
+
+template <typename Awaitable>
+requires(!std::same_as<void, typename Awaitable::ResultType>) inline SyncWaitTask<
+    typename Awaitable::ResultType> MakeSyncWaitTask(Awaitable&& a) {
   co_yield co_await std::forward<Awaitable>(a);
 }
 
-template<typename Awaitable>
-auto SyncWait(Awaitable&& a) { 
+template <typename Awaitable>
+requires(std::same_as<void, typename Awaitable::ResultType>) inline SyncWaitTask<
+    typename Awaitable::ResultType> MakeSyncWaitTask(Awaitable&& a) {
+  co_await std::forward<Awaitable>(a);
+}
 
+template <typename Awaitable>
+auto SyncWait(Awaitable&& a) {
   auto task = MakeSyncWaitTask(std::forward<Awaitable>(a));
-  task.Start();
+  ManualResetEvent event;
+  task.Start(event);
 
-  task.Wait();
-
-  spdlog::info("");
+  event.Wait();
 
   return task.Value();
 }
-
-
-
