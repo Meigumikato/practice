@@ -37,3 +37,27 @@ TEST(task, co_await) {
 
   ASSERT_EQ(1 + 2 + 3 + 4, SyncWait(task(1, 2, 3, 4)));
 }
+
+
+struct Awaiter {
+  auto await_ready() { return false; }
+  
+  auto await_suspend(std::coroutine_handle<> h) { return h; }
+
+  auto await_resume() {}
+};
+
+Task<> test1() {
+  co_await Awaiter{};
+}
+
+Task<> test2() {
+  co_await test1();
+  co_await Awaiter{};
+}
+
+
+TEST(task, awaiter) {
+  SyncWait(test1());
+  SyncWait(test2());
+}

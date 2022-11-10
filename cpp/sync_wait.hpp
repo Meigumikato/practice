@@ -3,16 +3,19 @@
 #include <concepts>
 #include <coroutine>
 #include <exception>
+#include <future>
 #include <optional>
 #include <type_traits>
 #include <variant>
 
 #include "manual_reset_event.hpp"
 
+namespace detail {
+
 template <typename Awaitable>
 class SyncWaitTask;
 
-template <typename ResultType>
+template <typename ReturnType>
 class SyncWaitTaskPromise {
  public:
   auto unhandled_exception() { result_ = std::current_exception(); }
@@ -21,28 +24,28 @@ class SyncWaitTaskPromise {
 
   auto final_suspend() noexcept -> std::suspend_always { return {}; }
 
-  SyncWaitTask<ResultType> get_return_object();
+  SyncWaitTask<ReturnType> get_return_object();
 
   template <typename Awaitable>
   Awaitable await_transform(Awaitable&& a) {
     return std::forward<Awaitable>(a);
   }
 
-  std::suspend_never yield_value(ResultType x) {
+  std::suspend_never yield_value(ReturnType x) {
     result_ = x;
     return {};
   }
 
-  ResultType GetResult() {
-    if (std::holds_alternative<ResultType>(result_)) {
-      return std::get<ResultType>(result_);
+  ReturnType GetResult() {
+    if (std::holds_alternative<ReturnType>(result_)) {
+      return std::get<ReturnType>(result_);
     } else {
       std::rethrow_exception(std::get<std::exception_ptr>(result_));
     }
   }
 
  private:
-  std::variant<ResultType, std::exception_ptr> result_;
+  std::variant<ReturnType, std::exception_ptr> result_;
 };
 
 template <>
@@ -73,10 +76,10 @@ class SyncWaitTaskPromise<void> {
   std::exception_ptr result_;
 };
 
-template <typename ResultType>
+template <typename ReturnType>
 class SyncWaitTask {
  public:
-  using promise_type = SyncWaitTaskPromise<ResultType>;
+  using promise_type = SyncWaitTaskPromise<ReturnType>;
 
   SyncWaitTask(std::coroutine_handle<promise_type> h) : h_(h) {}
 
@@ -86,17 +89,24 @@ class SyncWaitTask {
     }
   }
 
-  void Start(ManualResetEvent& event) {
+  void Start(std::promise<ReturnType> promise) {
     if (h_) {
-      event.Set();
       h_.resume();
+    }
+
+    if constexpr (std::is_same_v<ReturnType, void>) {
+      h_.promise().GetResult();
+      promise.set_value();
+      return;
+    } else {
+      promise.set_value(h_.promise().GetResult());
     }
   }
 
   void Wait() { h_.promise().event.Wait(); }
 
   auto Value() {
-    if constexpr (std::is_same_v<ResultType, void>) {
+    if constexpr (std::is_same_v<ReturnType, void>) {
       h_.promise().GetResult();
       return;
     } else {
@@ -108,8 +118,8 @@ class SyncWaitTask {
   std::coroutine_handle<promise_type> h_;
 };
 
-template <typename ResultType>
-inline SyncWaitTask<ResultType> SyncWaitTaskPromise<ResultType>::get_return_object() {
+template <typename ReturnType>
+inline SyncWaitTask<ReturnType> SyncWaitTaskPromise<ReturnType>::get_return_object() {
   return SyncWaitTask{std::coroutine_handle<SyncWaitTaskPromise>::from_promise(*this)};
 }
 
@@ -118,24 +128,30 @@ inline SyncWaitTask<void> SyncWaitTaskPromise<void>::get_return_object() {
 }
 
 template <typename Awaitable>
-requires(!std::same_as<void, typename Awaitable::ResultType>) inline SyncWaitTask<
-    typename Awaitable::ResultType> MakeSyncWaitTask(Awaitable&& a) {
-  co_yield co_await std::forward<Awaitable>(a);
+inline SyncWaitTask<typename Awaitable::ReturnType> MakeSyncWaitTask(Awaitable&& a) {
+  if constexpr (std::is_same_v<typename Awaitable::ReturnType, void>) {
+    co_await std::forward<Awaitable>(a);
+  } else {
+    co_yield co_await std::forward<Awaitable>(a);
+  }
 }
 
-template <typename Awaitable>
-requires(std::same_as<void, typename Awaitable::ResultType>) inline SyncWaitTask<
-    typename Awaitable::ResultType> MakeSyncWaitTask(Awaitable&& a) {
-  co_await std::forward<Awaitable>(a);
-}
+}  // namespace detail
 
 template <typename Awaitable>
 auto SyncWait(Awaitable&& a) {
-  auto task = MakeSyncWaitTask(std::forward<Awaitable>(a));
-  ManualResetEvent event;
-  task.Start(event);
+  using ReturnType = typename Awaitable::ReturnType;
 
-  event.Wait();
+  auto task = detail::MakeSyncWaitTask(std::forward<Awaitable>(a));
 
-  return task.Value();
+  std::promise<ReturnType> promise;
+  auto future = promise.get_future();
+  task.Start(std::move(promise));
+
+  if constexpr (std::is_same_v<void, ReturnType>) {
+    future.get();
+    return;
+  } else {
+    return future.get();
+  }
 }

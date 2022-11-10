@@ -8,9 +8,6 @@ template <typename T = void>
 class TaskPromise;
 
 template <typename T = void>
-struct Awaiter;
-
-template <typename T = void>
 class Task;
 
 template <typename T>
@@ -91,7 +88,7 @@ class TaskPromise<void> : public TaskPromiseBase<void> {
 template <typename T>
 class [[nodiscard]] Task {
  public:
-  using ResultType = T;
+  using ReturnType = T;
   using promise_type = TaskPromise<T>;
   using CoroutineHandleType = typename TaskPromise<T>::CoroutineHandleType;
 
@@ -148,7 +145,7 @@ class [[nodiscard]] Task {
     return temp;
   }
 
-  auto Resume() { coro_.resume(); }
+  // auto Resume() { coro_.resume(); }
 
   auto operator co_await() && noexcept -> Awaiter { return Awaiter{coro_}; }
 
@@ -161,7 +158,7 @@ class [[nodiscard]] Task {
 
   explicit Task(CoroutineHandleType h) noexcept : coro_(h) {}
 
-  CoroutineHandleType coro_{nullptr};
+  CoroutineHandleType coro_;
 };
 
 template <typename T>
