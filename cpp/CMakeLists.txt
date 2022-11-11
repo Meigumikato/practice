@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 project(cpp)
 
+include(CTest)
 include(FetchContent)
 include(GoogleTest)
-include(CTest)
 include(GNUInstallDirs)
 
+enable_testing()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
