@@ -12,7 +12,7 @@
 
 class StaticThreadPool { 
  public:
-  StaticThreadPool(int num = 4) : stopped_(false) {
+  StaticThreadPool(int num = std::thread::hardware_concurrency()) : stopped_(false) {
     for (int i = 0; i < num; ++i) {
       threads_.push_back(std::thread(&StaticThreadPool::Run, this));
     }
@@ -28,41 +28,38 @@ class StaticThreadPool {
 
   auto Schedule() {
     struct Awaiter {
-      auto await_ready() {}
+      auto await_ready() { return false; }
       auto await_suspend(std::coroutine_handle<> h) {
-        spdlog::info("Schedule Suspend {}", fmt::ptr(std::this_thread::get_id()));
         pool->Post(h);
       }
       auto await_resume() {
-        spdlog::info("Schedule Resume {}", fmt::ptr(std::this_thread::get_id()));
       }
 
       StaticThreadPool* pool;
     };
 
-    return Awaiter{};
+    return Awaiter{this};
   }
 
  private:
 
   void Run() {
-    while (1) {
+    while (!stopped_) {
       std::unique_lock lock{mutex_};
       while (!task_queue_.empty()) {
         cv_.wait(lock, [this] { return stopped_ || !task_queue_.empty(); });
       }
-
       auto task = task_queue_.front();
       task_queue_.pop_front();
-      task.resume();
 
-      if (stopped_) break;
+      task.resume();
     }
   }
 
   void Post(std::coroutine_handle<> h) {
     std::unique_lock lock{mutex_};
     task_queue_.push_back(h);
+    cv_.notify_all();
   }
 
   bool stopped_;

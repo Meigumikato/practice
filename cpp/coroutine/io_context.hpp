@@ -114,11 +114,13 @@ class IoContext : public std::enable_shared_from_this<IoContext> {
   void ProcessCoroutine() {
     std::lock_guard lock{mutex_};
     while (!co_handles_.empty()) {
-      auto& task = co_handles_.front();
+      auto task = co_handles_.front();
+      co_handles_.pop();
+
       task.resume();
       if (task.done()) {
+        task.destroy();
       }
-      co_handles_.pop();
     }
   }
 

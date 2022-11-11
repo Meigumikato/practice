@@ -5,6 +5,8 @@
 
 #include "task.hpp"
 #include "io_context.hpp"
+#include "sync_wait.hpp"
+#include "static_thread_pool.hpp"
 
 int x = 0;
 
@@ -45,6 +47,25 @@ Task<int> Delay(IoContext& ctx, int delay_s) {
 
 TEST(io_context, timer) {
   IoContext io_context;
-  CoSpawn(io_context, Delay(io_context, 10));
-  io_context.Run();
+  CoSpawn(io_context, Delay(io_context, 1));
+  io_context.RunOnce();
+  io_context.RunOnce();
 }
+
+Task<int> Transfer(StaticThreadPool& pool) {
+
+  co_await pool.Schedule();
+
+  co_return 10;
+}
+
+TEST(static_thread_pool, transfer) {
+  StaticThreadPool pool;
+
+  ASSERT_EQ(SyncWait(Transfer(pool)), 10);
+}
+
+
+
+
+
