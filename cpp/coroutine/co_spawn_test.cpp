@@ -2,17 +2,18 @@
 
 #include <gtest/gtest.h>
 #include <spdlog/spdlog.h>
+#include <unistd.h>
 
-#include "task.hpp"
+#include <thread>
+
 #include "io_context.hpp"
-#include "sync_wait.hpp"
 #include "static_thread_pool.hpp"
+#include "sync_wait.hpp"
+#include "task.hpp"
 
 int x = 0;
 
-Task<int> Take() {
-  co_return 42;
-}
+Task<int> Take() { co_return 42; }
 
 Task<int> Sum(int a, int c) { co_return a + c; }
 
@@ -32,7 +33,7 @@ TEST(co_spawn, spawn) {
 
   ctx.RunOnce();
 }
-
+//
 Task<int> Delay(IoContext& ctx, int delay_s) {
   Timer timer(ctx);
 
@@ -53,19 +54,18 @@ TEST(io_context, timer) {
 }
 
 Task<int> Transfer(StaticThreadPool& pool) {
-
+  std::cout << " before" << std::this_thread::get_id() << std::endl;
   co_await pool.Schedule();
-
+  std::cout << " after" << std::this_thread::get_id() << std::endl;
+  // sleep(1);
   co_return 10;
 }
 
 TEST(static_thread_pool, transfer) {
-  StaticThreadPool pool;
+  StaticThreadPool pool(1);
+  //
+  auto task = Transfer(pool);
 
+  ASSERT_EQ(SyncWait(std::move(task)), 10);
   ASSERT_EQ(SyncWait(Transfer(pool)), 10);
 }
-
-
-
-
-

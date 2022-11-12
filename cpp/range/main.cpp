@@ -15,42 +15,55 @@
 #include <range/v3/numeric/accumulate.hpp>
 #include <ostream>
 #include <iostream>
+#include <source_location>
+
+#include <memory>
 
 
 using namespace ranges;
 
+struct Test {
 
-int LagestFactor(int x) {
-
-  int base = 2;
-
-  while (x % base != 0) {
-    if (base >= x / 2) break;
-    ++base;
+  Test() {
+    std::source_location sl = std::source_location::current();
+    std::cout << sl.function_name() << "\n";
   }
 
-  if (x % base != 0) {
-    return 1;
-  } else {
-    return x / base;
+  Test(Test&& t) {
+    std::source_location sl = std::source_location::current();
+    a = t.a;
+    t.a = 0;
+    std::cout << sl.function_name() << "\n";
   }
 
-  return x;
+  void Moveable(std::source_location sc) && {
+    std::cout << "Moveable" << sc.function_name() << (int)sc.line() << (int)sc.column() << "\n";
+  }
+
+
+  ~Test() {
+    std::source_location sl = std::source_location::current();
+    std::cout << sl.function_name() << "\n";
+  }
+  int a{};
+};
+
+
+void Move(Test&& t) {
+  std::cout << "Move\n";
+  ++t.a;
 }
 
-
 int main() {
+  Test t;
 
-  std::ostringstream oss;
-  std::ostream_iterator<int> s(oss);
+  Test t1 = std::move(t);
 
-  std::set<int> a {1, 2, 4, 5};
 
-  oss.clear();
-
-  std::copy(a.begin(), a.end(), s);
-
-  std::cout << oss.str();
+  std::move(t1).Moveable(std::source_location::current());
+  // Move(std::move(t));
+  // std::cout << t1.a << std::endl;
+  // std::cout << t.a << std::endl;
 
   return 0;
 }

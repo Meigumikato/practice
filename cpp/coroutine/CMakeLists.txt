@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 
+enable_testing()
+
 project(coroutine)
 
-enable_testing()
 
 function(test)
   add_executable(${ARGV0})
@@ -12,7 +13,7 @@ function(test)
     ${ARGV0}
     PRIVATE ${ARGV0}_test.cpp)
   target_link_libraries(${ARGV0} PRIVATE ${TEST_BASE} Folly::folly gflags)
-  gtest_discover_tests(${ARGV0})
+  # gtest_discover_tests(${ARGV0})
 endfunction()
 
 

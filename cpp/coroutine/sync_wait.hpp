@@ -22,12 +22,15 @@ class SyncWaitTaskPromise {
 
   auto initial_suspend() -> std::suspend_always { return {}; }
 
-  auto final_suspend() noexcept -> std::suspend_always { return {}; }
+  auto final_suspend() noexcept -> std::suspend_always {
+    notify_.set_value(std::get<ReturnType>(result_));
+    return {};
+  }
 
   SyncWaitTask<ReturnType> get_return_object();
 
   template <typename Awaitable>
-  Awaitable await_transform(Awaitable&& a) {
+  Awaitable&& await_transform(Awaitable&& a) {
     return std::forward<Awaitable>(a);
   }
 
@@ -44,7 +47,10 @@ class SyncWaitTaskPromise {
     }
   }
 
+  void SetNotify(std::promise<ReturnType>&& p) { notify_ = std::move(p); }
+
  private:
+  std::promise<ReturnType> notify_;
   std::variant<ReturnType, std::exception_ptr> result_;
 };
 
@@ -64,7 +70,7 @@ class SyncWaitTaskPromise<void> {
     return std::forward<Awaitable>(a);
   }
 
-  void return_void() {}
+  void return_void() { notify_.set_value(); }
 
   void GetResult() {
     if (result_) {
@@ -72,7 +78,10 @@ class SyncWaitTaskPromise<void> {
     }
   }
 
+  void SetNotify(std::promise<void>&& p) { notify_ = std::move(p); }
+
  private:
+  std::promise<void> notify_;
   std::exception_ptr result_;
 };
 
@@ -91,15 +100,8 @@ class SyncWaitTask {
 
   void Start(std::promise<ReturnType> promise) {
     if (h_) {
+      h_.promise().SetNotify(std::move(promise));
       h_.resume();
-    }
-
-    if constexpr (std::is_same_v<ReturnType, void>) {
-      h_.promise().GetResult();
-      promise.set_value();
-      return;
-    } else {
-      promise.set_value(h_.promise().GetResult());
     }
   }
 

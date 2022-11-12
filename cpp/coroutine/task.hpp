@@ -2,6 +2,9 @@
 
 #include <coroutine>
 #include <exception>
+#include <iostream>
+#include <source_location>
+#include <thread>
 #include <variant>
 
 template <typename T = void>
@@ -17,8 +20,7 @@ class TaskPromiseBase {
     auto await_ready() noexcept -> bool { return false; }
 
     template <typename Promise>
-    auto await_suspend(std::coroutine_handle<Promise> h) noexcept
-        -> std::coroutine_handle<> {
+    auto await_suspend(std::coroutine_handle<Promise> h) noexcept -> std::coroutine_handle<> {
       auto& promise = h.promise();
       if (promise.continuation_ && !promise.continuation_.done()) {
         return promise.continuation_;
@@ -133,9 +135,11 @@ class [[nodiscard]] Task {
     return *this;
   }
 
-  ~Task() {
+  inline ~Task() {
+    auto fn1 = std::source_location::current();
     if (coro_) {
       coro_.destroy();
+    } else {
     }
   }
 
@@ -144,8 +148,6 @@ class [[nodiscard]] Task {
     coro_ = nullptr;
     return temp;
   }
-
-  // auto Resume() { coro_.resume(); }
 
   auto operator co_await() && noexcept -> Awaiter { return Awaiter{coro_}; }
 
@@ -163,7 +165,8 @@ class [[nodiscard]] Task {
 
 template <typename T>
 inline auto TaskPromise<T>::get_return_object() noexcept -> Task<T> {
-  return Task<T>{TaskPromise::CoroutineHandleType::from_promise(*this)};
+  auto x = Task<T>{TaskPromise::CoroutineHandleType::from_promise(*this)};
+  return x;
 }
 
 inline auto TaskPromise<>::get_return_object() noexcept -> Task<> {
